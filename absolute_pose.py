@@ -29,9 +29,16 @@ def compute_metrics(results, thresholds = [0.1, 1.0, 5.0]):
 
 
 def eval_pnp_estimator(instance, estimator='poselib_pnp'):
-    opt = instance['opt']
+    opt = instance['opt'].copy()
 
-    if estimator == 'poselib_pnp':
+    if estimator == 'poselib_pnp_approx':
+        opt["use_approx_stopping"] = True
+        tt1 = datetime.datetime.now()
+        pose, info = poselib.estimate_absolute_pose(instance['p2d'], instance['p3d'], instance['cam'], opt, {})
+        tt2 = datetime.datetime.now()
+        (R,t) = (pose.R, pose.t)
+    elif estimator == 'poselib_pnp_exact':
+        opt["use_approx_stopping"] = False
         tt1 = datetime.datetime.now()
         pose, info = poselib.estimate_absolute_pose(instance['p2d'], instance['p3d'], instance['cam'], opt, {})
         tt2 = datetime.datetime.now()
@@ -71,8 +78,9 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
         datasets = [(n,t) for (n,t) in datasets if substr_in_list(n,dataset_filter)]
 
     evaluators = {
-        'PnP (poselib)': lambda i: eval_pnp_estimator(i, estimator='poselib_pnp'),
-        'PnP (COLMAP)': lambda i: eval_pnp_estimator(i, estimator='pycolmap'),
+        'PnP (poselib, approx)': lambda i: eval_pnp_estimator(i, estimator='poselib_pnp_approx'),
+        'PnP (poselib, exact)': lambda i: eval_pnp_estimator(i, estimator='poselib_pnp_exact'),
+        # 'PnP (COLMAP)': lambda i: eval_pnp_estimator(i, estimator='pycolmap'),
         #'PnPL (poselib)': lambda i: eval_pnp_estimator(i, estimator='poselib_pnpl')
     }
 
@@ -95,9 +103,9 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
         opt = {
             'max_reproj_error': threshold,
             'max_epipolar_error': threshold,
-            'max_iterations': 1000,
-            'min_iterations': 100,
-            'success_prob': 0.9999
+            'max_iterations': 10000,
+            'min_iterations': 1,
+            'success_prob': 0.99
         }
 
         # Add in global overrides
@@ -114,6 +122,13 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
                 'threshold': threshold,
                 'opt': opt  
             }
+
+            num_random_samples = np.random.randint(10, 50)
+            if instance['p2d'].shape[0] > num_random_samples:
+                # Subsample N random points.
+                rand_idxs = np.random.choice(instance['p2d'].shape[0], num_random_samples, replace=False)
+                instance['p2d'] = instance['p2d'][rand_idxs]
+                instance['p3d'] = instance['p3d'][rand_idxs]
 
             # Check if we have 2D-3D line correspondences
             if 'l2d' in v:

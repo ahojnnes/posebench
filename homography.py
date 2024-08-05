@@ -25,10 +25,16 @@ def compute_metrics(results, thresholds = [5.0, 10.0, 20.0]):
     return metrics
 
 def eval_homography_estimator(instance, estimator='poselib'):
-    opt = instance['opt']
+    opt = instance['opt'].copy()
     threshold = instance['threshold']
 
-    if estimator == 'poselib':
+    if estimator == 'poselib_approx':
+        opt["use_approx_stopping"] = True
+        tt1 = datetime.datetime.now()
+        H, info = poselib.estimate_homography(instance['x1'], instance['x2'], opt, {})
+        tt2 = datetime.datetime.now()
+    elif estimator == 'poselib_exact':
+        opt["use_approx_stopping"] = False
         tt1 = datetime.datetime.now()
         H, info = poselib.estimate_homography(instance['x1'], instance['x2'], opt, {})
         tt2 = datetime.datetime.now()
@@ -71,8 +77,9 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
 
 
     evaluators = {
-        'H (poselib)': lambda i: eval_homography_estimator(i, estimator='poselib'),
-        'H (COLMAP)': lambda i: eval_homography_estimator(i, estimator='pycolmap'),
+        'H (poselib, approx)': lambda i: eval_homography_estimator(i, estimator='poselib_approx'),
+        'H (poselib, exact)': lambda i: eval_homography_estimator(i, estimator='poselib_exact'),
+        # 'H (COLMAP)': lambda i: eval_homography_estimator(i, estimator='pycolmap'),
     }
     if len(method_filter) > 0:
         evaluators = {k:v for (k,v) in evaluators.items() if substr_in_list(k,method_filter)}
@@ -94,9 +101,9 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
         opt = {
             'max_reproj_error': threshold,
             'max_epipolar_error': threshold,
-            'max_iterations': 1000,
-            'min_iterations': 100,
-            'success_prob': 0.9999
+            'max_iterations': 10000,
+            'min_iterations': 1,
+            'success_prob': 0.99
         }
 
         # Add in global overrides
@@ -120,6 +127,13 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
                 'threshold': threshold,
                 'opt': opt
             }
+
+            num_random_samples = np.random.randint(10, 50)
+            if instance['x1'].shape[0] > num_random_samples:
+                # Subsample N random points.
+                rand_idxs = np.random.choice(instance['x1'].shape[0], num_random_samples, replace=False)
+                instance['x1'] = instance['x1'][rand_idxs]
+                instance['x2'] = instance['x2'][rand_idxs]
 
             for name, fcn in evaluators.items():
                 errs, runtime = fcn(instance)

@@ -27,8 +27,15 @@ def compute_metrics(results, thresholds = [5.0, 10.0, 20.0]):
     return metrics
 
 def eval_essential_estimator(instance, estimator='poselib'):
-    opt = instance['opt']
-    if estimator == 'poselib':
+    opt = instance['opt'].copy()
+    if estimator == 'poselib_approx':
+        opt["use_approx_stopping"] = True
+        tt1 = datetime.datetime.now()
+        pose, info = poselib.estimate_relative_pose(instance['x1'], instance['x2'], instance['cam1'], instance['cam2'], opt, {})
+        tt2 = datetime.datetime.now()
+        (R,t) = (pose.R, pose.t)
+    elif estimator == 'poselib_exact':
+        opt["use_approx_stopping"] = False
         tt1 = datetime.datetime.now()
         pose, info = poselib.estimate_relative_pose(instance['x1'], instance['x2'], instance['cam1'], instance['cam2'], opt, {})
         tt2 = datetime.datetime.now()
@@ -79,8 +86,15 @@ def eval_essential_refinement(instance):
 
 
 def eval_fundamental_estimator(instance, estimator='poselib'):
-    opt = instance['opt']
-    if estimator == 'poselib':
+    opt = instance['opt'].copy()
+    if estimator == 'poselib_approx':
+        opt["use_approx_stopping"] = True
+        tt1 = datetime.datetime.now()
+        F, info = poselib.estimate_fundamental(instance['x1'], instance['x2'], opt, {})
+        tt2 = datetime.datetime.now()
+        inl = info['inliers']
+    elif estimator == 'poselib_exact':
+        opt["use_approx_stopping"] = False
         tt1 = datetime.datetime.now()
         F, info = poselib.estimate_fundamental(instance['x1'], instance['x2'], opt, {})
         tt2 = datetime.datetime.now()
@@ -144,10 +158,12 @@ def main(dataset_path='data/relative', force_opt = {}, dataset_filter=[], method
         datasets = [(n,t) for (n,t) in datasets if substr_in_list(n,dataset_filter)]
 
     evaluators = {
-        'E (poselib)': lambda i: eval_essential_estimator(i, estimator='poselib'),
-        'E (COLMAP)': lambda i: eval_essential_estimator(i, estimator='pycolmap'),
-        'F (poselib)': lambda i: eval_fundamental_estimator(i, estimator='poselib'),
-        'F (COLMAP)': lambda i: eval_fundamental_estimator(i, estimator='pycolmap'),
+        'E (poselib, approx)': lambda i: eval_essential_estimator(i, estimator='poselib_approx'),
+        'E (poselib, exact)': lambda i: eval_essential_estimator(i, estimator='poselib_exact'),
+        # 'E (COLMAP)': lambda i: eval_essential_estimator(i, estimator='pycolmap'),
+        'F (poselib, approx)': lambda i: eval_fundamental_estimator(i, estimator='poselib_approx'),
+        'F (poselib, exact)': lambda i: eval_fundamental_estimator(i, estimator='poselib_exact'),
+        # 'F (COLMAP)': lambda i: eval_fundamental_estimator(i, estimator='pycolmap'),
     }
     if len(method_filter) > 0:
         evaluators = {k:v for (k,v) in evaluators.items() if substr_in_list(k,method_filter)}
@@ -162,9 +178,9 @@ def main(dataset_path='data/relative', force_opt = {}, dataset_filter=[], method
         opt = {
             'max_reproj_error': threshold,
             'max_epipolar_error': threshold,
-            'max_iterations': 1000,
-            'min_iterations': 100,
-            'success_prob': 0.9999
+            'max_iterations': 10000,
+            'min_iterations': 1,
+            'success_prob': 0.99
         }
 
         for k, v in force_opt.items():
@@ -188,6 +204,13 @@ def main(dataset_path='data/relative', force_opt = {}, dataset_filter=[], method
                 'threshold': threshold,
                 'opt': opt
             }
+
+            num_random_samples = np.random.randint(10, 50)
+            if instance['x1'].shape[0] > num_random_samples:
+                # Subsample N random points.
+                rand_idxs = np.random.choice(instance['x1'].shape[0], num_random_samples, replace=False)
+                instance['x1'] = instance['x1'][rand_idxs]
+                instance['x2'] = instance['x2'][rand_idxs]
 
             for name, fcn in evaluators.items():
                 errs, runtime = fcn(instance)
