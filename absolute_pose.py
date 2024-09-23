@@ -112,7 +112,7 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
             full_num_samples = v['p2d'][:].shape[0]
 
             np.random.seed(0)
-            for num_samples in [30, 50, 100, 500, 1000]:
+            for num_samples in [20, 100, 200, 1000]:
                 if full_num_samples < num_samples:
                     continue
                 for success_prob in [0.95, 0.99]:
