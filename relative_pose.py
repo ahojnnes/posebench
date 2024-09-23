@@ -7,6 +7,7 @@ import pycolmap
 import datetime
 import posebench
 import cv2
+import collections
 from tqdm import tqdm
 import argparse
 
@@ -186,38 +187,40 @@ def main(dataset_path='data/relative', force_opt = {}, dataset_filter=[], method
         for k, v in force_opt.items():
             opt[k] = v
 
-        results = {}
-        for k in evaluators.keys():
-            results[k] = {
-                'errs': [],
-                'runtime': []
-            }
+        results = collections.defaultdict(lambda: {"errs": [], "runtime": []})
 
         for k, v in tqdm(f.items(), desc=dataset):
-            instance = {
-                'x1': v['x1'][:],
-                'x2': v['x2'][:],
-                'cam1': h5_to_camera_dict(v['camera1']),
-                'cam2': h5_to_camera_dict(v['camera2']),
-                'R': v['R'][:],
-                't': v['t'][:],
-                'threshold': threshold,
-                'opt': opt
-            }
+            full_num_samples = v['x1'][:].shape[0]
 
-            num_random_samples = np.random.randint(10, 50)
-            if instance['x1'].shape[0] > num_random_samples:
-                # Subsample N random points.
-                rand_idxs = np.random.choice(instance['x1'].shape[0], num_random_samples, replace=False)
-                instance['x1'] = instance['x1'][rand_idxs]
-                instance['x2'] = instance['x2'][rand_idxs]
+            np.random.seed(0)
+            for num_samples in [30, 50, 100, 500, 1000]:
+                if full_num_samples < num_samples:
+                    continue
+                for success_prob in [0.95, 0.99]:
+                    opt['success_prob'] = success_prob
+                    for _ in range(10):  # Run on multiple permutations to reduce randomness.
+                        instance = {
+                            'x1': v['x1'][:],
+                            'x2': v['x2'][:],
+                            'cam1': h5_to_camera_dict(v['camera1']),
+                            'cam2': h5_to_camera_dict(v['camera2']),
+                            'R': v['R'][:],
+                            't': v['t'][:],
+                            'threshold': threshold,
+                            'opt': opt
+                        }
+                        rand_idxs = np.random.choice(instance['x1'].shape[0], num_samples, replace=False)
+                        instance['x1'] = instance['x1'][rand_idxs]
+                        instance['x2'] = instance['x2'][rand_idxs]
 
-            for name, fcn in evaluators.items():
-                errs, runtime = fcn(instance)
-                results[name]['errs'].append(np.array(errs))
-                results[name]['runtime'].append(runtime)
+                        for name, fcn in evaluators.items():
+                            errs, runtime = fcn(instance)
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['errs'].append(np.array(errs))
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['runtime'].append(runtime)
+
         metrics[dataset] = compute_metrics(results)
         full_results[dataset] = results
+
     return metrics, full_results
 
 if __name__ == '__main__':

@@ -124,8 +124,8 @@ if __name__ == '__main__':
     force_opt,  method_filter, dataset_filter = parse_args()
     problems = {
         'absolute pose': absolute_pose.main,
-        'relative pose': relative_pose.main,
-        'homography': homography.main,
+        # 'relative pose': relative_pose.main,
+        # 'homography': homography.main,
     }
     start_time = datetime.datetime.now()
     compiled_metrics = []

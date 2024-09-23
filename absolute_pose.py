@@ -6,6 +6,7 @@ import poselib
 import pycolmap
 import datetime
 import posebench
+import collections
 from tqdm import tqdm
 
 # Compute metrics for absolute pose estimation
@@ -92,12 +93,7 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
     for (dataset, threshold) in datasets:
         f = h5py.File(f'{dataset_path}/{dataset}.h5', 'r')
 
-        results = {}
-        for k in evaluators.keys():
-            results[k] = {
-                'errs': [],
-                'runtime': []
-            }
+        results = collections.defaultdict(lambda: {"errs": [], "runtime": []})
 
         # RANSAC options
         opt = {
@@ -113,36 +109,41 @@ def main(dataset_path='data/absolute', force_opt = {}, dataset_filter=[], method
             opt[k] = v
 
         for k, v in tqdm(f.items(), desc=dataset):
-            instance = {
-                'p2d': v['p2d'][:],
-                'p3d': v['p3d'][:],
-                'cam': h5_to_camera_dict(v['camera']),
-                'R': v['R'][:],
-                't': v['t'][:],
-                'threshold': threshold,
-                'opt': opt  
-            }
+            full_num_samples = v['p2d'][:].shape[0]
 
-            num_random_samples = np.random.randint(10, 50)
-            if instance['p2d'].shape[0] > num_random_samples:
-                # Subsample N random points.
-                rand_idxs = np.random.choice(instance['p2d'].shape[0], num_random_samples, replace=False)
-                instance['p2d'] = instance['p2d'][rand_idxs]
-                instance['p3d'] = instance['p3d'][rand_idxs]
+            np.random.seed(0)
+            for num_samples in [30, 50, 100, 500, 1000]:
+                if full_num_samples < num_samples:
+                    continue
+                for success_prob in [0.95, 0.99]:
+                    opt['success_prob'] = success_prob
+                    for _ in range(10):  # Run on multiple permutations to reduce randomness.
+                        instance = {
+                            'p2d': v['p2d'][:],
+                            'p3d': v['p3d'][:],
+                            'cam': h5_to_camera_dict(v['camera']),
+                            'R': v['R'][:],
+                            't': v['t'][:],
+                            'threshold': threshold,
+                            'opt': opt  
+                        }
+                        rand_idxs = np.random.choice(instance['p2d'].shape[0], num_samples, replace=False)
+                        instance['p2d'] = instance['p2d'][rand_idxs]
+                        instance['p3d'] = instance['p3d'][rand_idxs]
 
-            # Check if we have 2D-3D line correspondences
-            if 'l2d' in v:
-                instance['l2d'] = v['l2d'][:]
-                instance['l3d'] = v['l3d'][:]
-            else:
-                instance['l2d'] = np.zeros((0,4))
-                instance['l3d'] = np.zeros((0,6))
-                
-            # Run each of the evaluators 
-            for name, fcn in evaluators.items():
-                errs, runtime = fcn(instance)
-                results[name]['errs'].append(np.array(errs))
-                results[name]['runtime'].append(runtime)
+                        # Check if we have 2D-3D line correspondences
+                        if 'l2d' in v:
+                            instance['l2d'] = v['l2d'][:]
+                            instance['l3d'] = v['l3d'][:]
+                        else:
+                            instance['l2d'] = np.zeros((0,4))
+                            instance['l3d'] = np.zeros((0,6))
+                            
+                        # Run each of the evaluators 
+                        for name, fcn in evaluators.items():
+                            errs, runtime = fcn(instance)
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['errs'].append(np.array(errs))
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['runtime'].append(runtime)
 
         metrics[dataset] = compute_metrics(results)
         full_results[dataset] = results

@@ -5,6 +5,7 @@ from utils.misc import *
 import poselib
 import datetime
 import posebench
+import collections
 import cv2
 from tqdm import tqdm
 
@@ -14,7 +15,7 @@ def compute_metrics(results, thresholds = [5.0, 10.0, 20.0]):
     methods = results.keys()
     metrics = {}
     for m in methods:
-        max_err = [np.max((a,b)) for (a,b) in results[m]['errs']]
+        max_err = [a for (a,b) in results[m]['errs']]
         metrics[m] = {}
         aucs = compute_auc(max_err, thresholds)
         for auc, t in zip(aucs, thresholds):
@@ -61,7 +62,7 @@ def eval_homography_estimator(instance, estimator='poselib'):
         err_R = rotation_angle(instance['R'] @ R.T)
         err_t = angle(instance['t'], t)
 
-        if err_R + err_t < best_err_R + best_err_t:
+        if err_R < best_err_R:
             best_err_R = err_R
             best_err_t = err_t
     
@@ -75,7 +76,6 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
     if len(dataset_filter) > 0:
         datasets = [(n,t) for (n,t) in datasets if substr_in_list(n,dataset_filter)]
 
-
     evaluators = {
         'H (poselib, approx)': lambda i: eval_homography_estimator(i, estimator='poselib_approx'),
         'H (poselib, exact)': lambda i: eval_homography_estimator(i, estimator='poselib_exact'),
@@ -84,18 +84,12 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
     if len(method_filter) > 0:
         evaluators = {k:v for (k,v) in evaluators.items() if substr_in_list(k,method_filter)}
 
-    
     metrics = {}
     full_results = {}
     for (dataset, threshold) in datasets:
         f = h5py.File(f'{dataset_path}/{dataset}.h5', 'r')
 
-        results = {}
-        for k in evaluators.keys():
-            results[k] = {
-                'errs': [],
-                'runtime': []
-            }
+        results = collections.defaultdict(lambda: {"errs": [], "runtime": []})
 
         # RANSAC options
         opt = {
@@ -103,7 +97,6 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
             'max_epipolar_error': threshold,
             'max_iterations': 10000,
             'min_iterations': 1,
-            'success_prob': 0.99
         }
 
         # Add in global overrides
@@ -117,30 +110,36 @@ def main(dataset_path='data/homography', force_opt = {}, dataset_filter=[], meth
 
         for k in tqdm(pairs, desc=dataset):
             v = f[k]
-            instance = {
-                'x1': v['x1'][:],
-                'x2': v['x2'][:],
-                'cam1': h5_to_camera_dict(v['camera1']),
-                'cam2': h5_to_camera_dict(v['camera2']),
-                'R': v['R'][:],
-                't': v['t'][:],
-                'threshold': threshold,
-                'opt': opt
-            }
+            full_num_samples = v['x1'][:].shape[0]
 
-            num_random_samples = np.random.randint(10, 50)
-            if instance['x1'].shape[0] > num_random_samples:
-                # Subsample N random points.
-                rand_idxs = np.random.choice(instance['x1'].shape[0], num_random_samples, replace=False)
-                instance['x1'] = instance['x1'][rand_idxs]
-                instance['x2'] = instance['x2'][rand_idxs]
+            np.random.seed(0)
+            for num_samples in [20, 100, 200, 1000]:
+                if full_num_samples < num_samples:
+                    continue
+                for success_prob in [0.95, 0.99]:
+                    opt['success_prob'] = success_prob
+                    for _ in range(10):  # Run on multiple permutations to reduce randomness.
+                        instance = {
+                            'x1': v['x1'][:],
+                            'x2': v['x2'][:],
+                            'cam1': h5_to_camera_dict(v['camera1']),
+                            'cam2': h5_to_camera_dict(v['camera2']),
+                            'R': v['R'][:],
+                            't': v['t'][:],
+                            'threshold': threshold,
+                            'opt': opt
+                        }
+                        rand_idxs = np.random.choice(instance['x1'].shape[0], num_samples, replace=False)
+                        instance['x1'] = instance['x1'][rand_idxs]
+                        instance['x2'] = instance['x2'][rand_idxs]
+                        for name, fcn in evaluators.items():
+                            errs, runtime = fcn(instance)
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['errs'].append(np.array(errs))
+                            results[name + f" [n={num_samples}, s={opt['success_prob']}]"]['runtime'].append(runtime)
 
-            for name, fcn in evaluators.items():
-                errs, runtime = fcn(instance)
-                results[name]['errs'].append(np.array(errs))
-                results[name]['runtime'].append(runtime)
         metrics[dataset] = compute_metrics(results)
         full_results[dataset] = results
+
     return metrics, full_results
 
 if __name__ == '__main__':
